@@ -1,0 +1,9 @@
+stac.ecmwf-destine-deode.f.ewcloud.host {
+  reverse_proxy http://cache:80 {
+    header_up -Authorization
+  }
+  basic_auth {
+   # created with docker run --rm -it caddy caddy hash-password
+   deode $2a$14$tOsXeotWL6KJKQKGTvofGu9z/yfuQJ1ke.hTOlcclFy1bdnAZaCNC
+  }
+}

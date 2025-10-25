@@ -13,8 +13,12 @@ dependencies = [
     "eccodes==2.41",
     #"eccodeslib<2.44",
     "fsspec>=2025.2.0",
+    "gribscan",
+    "intake>=2.0.8",
+    "intake-esm",
     "jinja2>=3.1.5",
     "polytope-client>=0.7.4",
+    "s3fs>=2025.9.0",
     "sanic>=24.6.0",
     "zarr>=2.18.3,<3",
 ]
@@ -30,3 +34,7 @@ dev-dependencies = [
     "matplotlib>=3.9.2",
     "xarray>=2024.10.0",
 ]
+
+[tool.uv.sources]
+gribscan = { git = "https://github.com/observingClouds/gribscan", rev = "deode" }
+intake-esm = { git = "https://github.com/observingClouds/intake-esm.git", rev = "dcmdb_datatree" }

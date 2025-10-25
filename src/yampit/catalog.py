@@ -2,6 +2,13 @@ import numpy as np
 import xarray as xr
 import requests
 from functools import lru_cache
+import intake
+from gribscan.gridutils import LambertLam
+from typing import Dict
+import datetime as dt
+import isodate
+import pandas as pd
+import pyproj
 
 demo = dict(
     base_request={
@@ -114,37 +121,161 @@ def read_destine_catalog():
     return {name: config
             for name, config in _read_destine_catalog(root)}
 
-def read_dmi_catalog():
-    def format_param(varid):
-        return {get_param_info(varid)["shortname"]: {"dims": ("time", "x", "y"), **param_info_to_var_metadata(get_param_info(varid))}}
+
+def _create_projection(config) -> Dict:
+    # Calculate SW corner of projection
+    corners = get_domain_properties(config)
+    kwargs={
+        'Ni': int(config['config.domain.nimax']),
+        'Nj': int(config['config.domain.njmax']),
+        'shapeOfTheEarth': 6,
+        'edition': 2,
+        'DxInMetres': int(config['config.domain.xdx']),
+        'DyInMetres': int(config['config.domain.xdy']),
+        'LaDInDegrees': float(config['config.domain.xlatcen']),
+        'LoVInDegrees': float(config['config.domain.xloncen']),
+        'Latin1InDegrees': float(config['config.domain.xlat0']),
+        'Latin2InDegrees': float(config['config.domain.xlat0']),
+        'longitudeOfFirstGridPointInDegrees': corners['minlon'],  # does not match GRIB message
+        'latitudeOfFirstGridPointInDegrees': corners['minlat'],
+        'iScansPositively': 1,
+        'jScansPositively': 1,
+        'radiusInMetres': None # not set for GRIB2
+    }
+    proj = LambertLam()
+    p = proj.compute_coords(**kwargs)
+    
+    return p
+
+
+def _build_coords_from_exp_config(config, use_proj=True) -> Dict:
+    start = dt.datetime.strptime(config['config.general.times.start'], "%Y-%m-%dT%H:%M:%SZ")
+    period = isodate.parse_duration(config['config.general.times.forecast_range'])
+    end = start + period
+
+    coords = {
+        "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
+        "x": range(config['config.domain.nimax']),
+        "y": range(config['config.domain.njmax']),
+    }
+
+    if use_proj:
+        coords.update(_create_projection(config))
+
+
+    return coords
+
+
+def get_domain_properties(config: dict) -> dict:
+    """Get domain properties.
+
+    Args:
+        domain_spec (dict): Domain specification
+
+    Returns:
+        dict: Domain properties
+    
+    NOTE: This function is mostly a copy from Deode Workflow but without rounding the outputs.
+    """
+    domain_spec = {
+        "nlon": config["config.domain.nimax"],
+        "nlat": config["config.domain.njmax"],
+        "latc": config["config.domain.xlatcen"],
+        "lonc": config["config.domain.xloncen"],
+        "lat0": config["config.domain.xlat0"],
+        "lon0": config["config.domain.xlon0"],
+        "gsize": config["config.domain.xdx"],
+    }
+
+    lonc = domain_spec["lonc"]
+    latc = domain_spec["latc"]
+    nlon = domain_spec["nlon"]
+    nlat = domain_spec["nlat"]
+    gsize = domain_spec["gsize"]
+
+    proj_string = (
+            f"+proj=lcc +lat_0={domain_spec['lat0']!s} +lon_0={domain_spec['lon0']!s} "
+            f"+lat_1={domain_spec['lat0']!s} +lat_2={domain_spec['lat0']!s} "
+            f"+units=m +no_defs +R={6371229!s}"
+        )
+
+    xloncen, xlatcen = pyproj.Transformer.from_crs(
+        pyproj.CRS.from_string("EPSG:4326"), pyproj.CRS.from_string(proj_string), always_xy=True
+    ).transform(lonc, latc)
+
+    x_0 = float(xloncen) - (0.5 * ((float(nlon) - 1.0) * gsize))
+    y_0 = float(xlatcen) - (0.5 * ((float(nlat) - 1.0) * gsize))
+
+    xxx = np.empty([nlon])
+    yyy = np.empty([nlat])
+    for i in range(nlon):
+        xxx[i] = x_0 + (float(i) * gsize)
+    for j in range(nlat):
+        yyy[j] = y_0 + (float(j) * gsize)
+
+    x_v, y_v = np.meshgrid(xxx, yyy)
+    lons, lats = pyproj.Transformer.from_crs(
+        pyproj.CRS.from_string(proj_string), pyproj.CRS.from_string("EPSG:4326"), always_xy=True
+    ).transform(x_v, y_v)
+
+    minlat = np.min(lats)
+    minlon = np.min(lons)
+    maxlat = np.max(lats)
+    maxlon = np.max(lons)
+
+    minlat = np.max([minlat, -90])
+    minlon = np.max([minlon, -180])
+    maxlat = np.min([maxlat, 90])
+    maxlon = np.min([maxlon, 180])
+
+    domain_properties = {
+        "minlat": minlat,
+        "minlon": minlon,
+        "maxlat": maxlat,
+        "maxlon": maxlon,
+    }
+    return domain_properties
+
+
+def _decode_dmi_catalog_entry(cat_entry):
+    base_request = cat_entry["fdb"]["fdb_request"]
+    coords = _build_coords_from_exp_config(cat_entry)
+    variables = {
+        get_param_info(varid)["shortname"]: {
+            "dims": ("time", "x", "y"),
+            **param_info_to_var_metadata(get_param_info(varid)),
+        }
+        for varid in [167, 3073, 3074, 174096]
+    }
+    if hasattr(coords, "lat"):
+        variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north"}}
+    if hasattr(coords, "lon"):
+        variables["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east"}}
+    internal_dims = ["x", "y"]
 
     return {
-        "deode_on_duty": {
-            "base_request": {
-                'class': 'd1',
-                'dataset': 'on-demand-extremes-dt',
-                'time': '0000',
-                'expver': '0099',
-                'date': '20241119',
-                'levtype': 'sfc',
-                'georef': 'ud3q9t',
-                'stream': 'oper',
-                'type': 'fc',
-            },
-            "coords":{
-                "time": xr.date_range("2024-11-19", "2024-11-21", freq="h"),
-                "x": range(1489),
-                "y": range(1489),
-            },
-            "variables": {
-                k: v
-                for i in [167, 3073, 3074, 174096]
-                for k, v in format_param(i).items()
-            },
-            "internal_dims": ["x", "y"],
-        }
+        "base_request": base_request,
+        "coords": coords,
+        "variables": variables,
+        "internal_dims": internal_dims,
     }
 
 
+def read_dmi_catalog():
+    intake_esm_url = "https://object-store.os-api.cci1.ecmwf.int/deode-dcmdb/catalog/catalog-fdb.json"
+    cat = intake.open_esm_datastore(
+            intake_esm_url,
+            columns_with_iterables=["fdb", "variables", "stores"],
+            sep="/",
+        )
+
+    ds_collection = {}
+    for name, exp in cat.items():
+        if exp.df.iloc[0]["fdb"] is not {}:
+            ds_name = name
+            ds_collection[ds_name] = _decode_dmi_catalog_entry(exp.df.iloc[0])
+    return ds_collection
+
+
 if __name__ == "__main__":
-    print(read_destine_catalog())
+    print(read_dmi_catalog())

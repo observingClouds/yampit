@@ -10,7 +10,7 @@ from .exceptions import NoSuchData
 
 app = Sanic("YAMPIT_Server")
 
-#app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_destine_catalog().items()}
+# app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_destine_catalog().items()}
 app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog().items()}
 app.ctx.request_handler = AsyncPolytopeRequestHandler("polytope.lumi.apps.dte.destination-earth.eu", "destination-earth")
 

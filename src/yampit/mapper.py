@@ -11,6 +11,29 @@ class MarsDataset:
         self.coords = {k: np.asarray(v) for k, v in coords.items()}
         self.variables = variables
         self.internal_dims = internal_dims
+    
+    def set_coord_attrs(self, name, var):
+        if name == "time":
+            return {
+                "long_name": "time",
+                "standard_name": "time",
+                "units": "seconds since " + str(np.datetime_as_string(self.coords[name][0], unit='s')),
+                "calendar": "gregorian",
+                "_ARRAY_DIMENSIONS": ['time'],
+                "axis": "T",
+            }
+        elif name in ['lat', 'lon']:
+            return {
+                "long_name": "latitude" if name == "lat" else "longitude",
+                "standard_name": "latitude" if name == "lat" else "longitude",
+                "units": "degrees_north" if name == "lat" else "degrees_east",
+                "axis": "Y" if name == "lat" else "X",
+                "_ARRAY_DIMENSIONS": ['y', 'x'],
+            }
+        else:
+            return {
+                "_ARRAY_DIMENSIONS": [name],
+            }
         
     @lru_cache
     def zmetadata(self):
@@ -22,22 +45,18 @@ class MarsDataset:
                     "zarr_format": 2
                 },
                 **{f"{name}/.zarray": {
-                        "chunks": [len(var)],
+                        "chunks": var.shape,
                         "compressor": None,
-                        "dtype": "i4" if name == "time" else var.dtype.descr[0][1],
+                        "dtype": "<i8" if name == "time" else var.dtype.descr[0][1],
                         "fill_value": None,
                         "filters": [],
                         "order": "C",
-                        "shape": [len(var)],
+                        "shape": var.shape,
                         "zarr_format": 2,
                     }
                     for name, var in self.coords.items()
                 },
-                **{f"{name}/.zattrs": {
-                        "_ARRAY_DIMENSIONS": [name],
-                        "units": f"seconds since {self.coords[name][0]}" if name == "time" else None,
-                    }
-                    for name, var in self.coords.items()
+                **{f"{name}/.zattrs": self.set_coord_attrs(name, var) for name, var in self.coords.items()
                 },
                 **{f"{name}/.zarray": {
                         "chunks": [len(self.coords[dim]) if dim in self.internal_dims else 1

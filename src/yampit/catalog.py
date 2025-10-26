@@ -25,6 +25,7 @@ def param_info_to_var_metadata(param_info):
         "attrs": {
             "long_name": param_info["name"],
             "units": get_units()[param_info["unit_id"]],
+            "coordinates": "lat lon",
         }
     }
 
@@ -200,7 +201,8 @@ def get_domain_properties(config: dict) -> dict:
 
 def _decode_dmi_catalog_entry(cat_entry):
     base_request = cat_entry["fdb"]["fdb_request"]
-    coords = _build_coords_from_exp_config(cat_entry)
+    base_request['levtype'] = 'sfc'
+    coords = _build_coords_from_exp_config(cat_entry, use_proj=True)
     variables = {
         get_param_info(varid)["shortname"]: {
             "dims": ("time", "x", "y"),
@@ -208,18 +210,20 @@ def _decode_dmi_catalog_entry(cat_entry):
         }
         for varid in [167, 3073, 3074, 174096]
     }
-    if hasattr(coords, "lat"):
-        variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north"}}
-    if hasattr(coords, "lon"):
-        variables["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east"}}
-    internal_dims = ["x", "y"]
+    if "lat" in coords:
+        variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude", "axis": "Y"}}
+    if "lon" in coords:
+        variables["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude", "axis": "X"}}
+    internal_dims = ["x", "y", "lat", "lon"]
 
-    return {
+    result = {
         "base_request": base_request,
         "coords": coords,
         "variables": variables,
         "internal_dims": internal_dims,
     }
+
+    return result
 
 
 def read_dmi_catalog():

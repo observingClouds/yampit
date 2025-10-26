@@ -110,19 +110,31 @@ def _create_projection(config) -> Dict:
     return p
 
 
-def _build_coords_from_exp_config(config, use_proj=True) -> Dict:
+def _build_coords_from_exp_config(config, use_proj=True, flatten=True) -> Dict:
     start = dt.datetime.strptime(config['config.general.times.start'], "%Y-%m-%dT%H:%M:%SZ")
     period = isodate.parse_duration(config['config.general.times.forecast_range'])
     end = start + period
 
-    coords = {
-        "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
-        "x": range(config['config.domain.nimax']),
-        "y": range(config['config.domain.njmax']),
-    }
+    if flatten:
+        coords = {
+            "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
+            "cell": range(config['config.domain.nimax']*config['config.domain.njmax']),
+        }
+    else:
+        coords = {
+            "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
+            "x": np.arange(config['config.domain.nimax']),
+            "y": np.arange(config['config.domain.njmax']),
+        }
 
     if use_proj:
-        coords.update(_create_projection(config))
+        geocoords = _create_projection(config)
+        if flatten:
+            geocoords["lat"] = geocoords["lat"].flatten().astype('<f4')
+            geocoords["lon"] = geocoords["lon"].flatten().astype('<f4')
+            coords.update(geocoords)
+        else:
+            coords.update(_create_projection(config))
 
 
     return coords
@@ -199,22 +211,36 @@ def get_domain_properties(config: dict) -> dict:
     return domain_properties
 
 
-def _decode_dmi_catalog_entry(cat_entry):
+def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     base_request = cat_entry["fdb"]["fdb_request"]
     base_request['levtype'] = 'sfc'
-    coords = _build_coords_from_exp_config(cat_entry, use_proj=True)
-    variables = {
-        get_param_info(varid)["shortname"]: {
+    coords = _build_coords_from_exp_config(cat_entry, use_proj=True, flatten=flatten)
+    if flatten:
+        variables = {
+            get_param_info(varid)["shortname"]: {
+                "dims": ("time", "cell"),
+                **param_info_to_var_metadata(get_param_info(varid)),
+            }
+            for varid in [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 174096, 228023, 228024, 228141, 228164, 228235, 228236, 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
+        }
+        if "lat" in coords:
+            variables["lat"] = {"dims": ("cell",), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude"}}
+        if "lon" in coords:
+            variables["lon"] = {"dims": ("cell",), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude"}}
+        internal_dims = ["cell", "lat", "lon"]
+    else:
+        variables = {
+            get_param_info(varid)["shortname"]: {
             "dims": ("time", "x", "y"),
             **param_info_to_var_metadata(get_param_info(varid)),
+            }
+            for varid in [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 174096, 228023, 228024, 228141, 228164, 228235, 228236, 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
         }
-        for varid in [167, 3073, 3074, 174096]
-    }
-    if "lat" in coords:
-        variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude", "axis": "Y"}}
-    if "lon" in coords:
-        variables["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude", "axis": "X"}}
-    internal_dims = ["x", "y", "lat", "lon"]
+        if "lat" in coords:
+            variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude", "axis": "Y"}}
+        if "lon" in coords:
+            variables["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude", "axis": "X"}}
+        internal_dims = ["x", "y", "lat", "lon"]
 
     result = {
         "base_request": base_request,
@@ -226,7 +252,7 @@ def _decode_dmi_catalog_entry(cat_entry):
     return result
 
 
-def read_dmi_catalog():
+def read_dmi_catalog(flatten=True):
     intake_esm_url = "https://object-store.os-api.cci1.ecmwf.int/deode-dcmdb/catalog/catalog-fdb.json"
     cat = intake.open_esm_datastore(
             intake_esm_url,
@@ -238,7 +264,7 @@ def read_dmi_catalog():
     for name, exp in cat.items():
         if exp.df.iloc[0]["fdb"] is not {}:
             ds_name = name
-            ds_collection[ds_name] = _decode_dmi_catalog_entry(exp.df.iloc[0])
+            ds_collection[ds_name] = _decode_dmi_catalog_entry(exp.df.iloc[0], flatten=flatten)
     return ds_collection
 
 

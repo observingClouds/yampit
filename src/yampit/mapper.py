@@ -47,7 +47,7 @@ class MarsDataset:
                 **{f"{name}/.zarray": {
                         "chunks": var.shape,
                         "compressor": None,
-                        "dtype": "<i8" if name == "time" else var.dtype.descr[0][1],
+                        "dtype": "<i4" if name == "time" else var.dtype.descr[0][1],
                         "fill_value": None,
                         "filters": [],
                         "order": "C",
@@ -100,12 +100,13 @@ class MarsDataset:
         if var in self.coords:
             return 'inline', self.coord(var)
 
-        def _encode_mars_request(dim, c):
+        def _encode_mars_request(dim, coords, idx):
+            c = coords[idx]
             if dim == "time":
-                date_str = np.datetime_as_string(c, "m")
+                date_str = np.datetime_as_string(coords[0], "m")
                 date, time = date_str.replace("-", "").replace(":", "").split("T")
 
-                return {"date": date, "time": time}
+                return {"date": date, "time": time, "step": f"{idx}"}
             else:
                 return {dim: str(c)}
 
@@ -116,7 +117,7 @@ class MarsDataset:
                 k: v
                 for dim, idx in zip(self.variables[var]["dims"], chunk)
                 if dim not in self.internal_dims
-                for k, v in _encode_mars_request(dim, self.coords[dim][idx]).items()
+                for k, v in _encode_mars_request(dim, self.coords[dim], idx).items()
             }
         }
 

@@ -25,7 +25,7 @@ def param_info_to_var_metadata(param_info):
         "attrs": {
             "long_name": param_info["name"],
             "units": get_units()[param_info["unit_id"]],
-            "coordinates": "lat lon",
+            # "coordinates": "lat lon",
         }
     }
 

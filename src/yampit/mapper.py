@@ -27,8 +27,8 @@ class MarsDataset:
                 "long_name": "latitude" if name == "lat" else "longitude",
                 "standard_name": "latitude" if name == "lat" else "longitude",
                 "units": "degrees_north" if name == "lat" else "degrees_east",
-                "axis": "Y" if name == "lat" else "X",
-                "_ARRAY_DIMENSIONS": ['y', 'x'],
+                # "axis": "Y" if name == "lat" else "X",
+                # "_ARRAY_DIMENSIONS": ['y', 'x'],
             }
         else:
             return {

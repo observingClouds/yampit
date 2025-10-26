@@ -16,8 +16,11 @@ dependencies = [
     "gribscan",
     "intake>=2.0.8",
     "intake-esm",
+    "isodate>=0.7.2",
     "jinja2>=3.1.5",
+    "pandas>=2.3.3",
     "polytope-client>=0.7.4",
+    "pyproj>=3.7.2",
     "sanic>=24.6.0",
     "zarr>=2.18.3,<3",
 ]
@@ -36,4 +39,4 @@ dev-dependencies = [
 
 [tool.uv.sources]
 gribscan = { git = "https://github.com/observingClouds/gribscan", rev = "deode" }
-intake-esm = { git = "https://github.com/observingClouds/intake-esm.git", rev = "dcmdb_datatree" }
+intake-esm = { git = "https://github.com/observingClouds/intake-esm.git", rev = "bf250b51a" }

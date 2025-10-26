@@ -21,8 +21,15 @@ def is_meta(key):
 async def list_datasets(request):
     return json(list(sorted(app.ctx.datasets)))
 
-@app.get("/ds/<dsid>/<key:path>")
-async def get_chunk(request, dsid, key):
+@app.get("/api/v1/reload")
+async def reload_catalog(request):
+    app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog().items()}
+    return json({"status": "reloaded"})
+
+
+@app.get("/ds/<dsid1>/<dsid2>/<key:path>")
+async def get_chunk(request, dsid1, dsid2, key):
+    dsid = f"{dsid1}/{dsid2}"
     kind, request = app.ctx.datasets[dsid].key2request(key)
 
     if is_meta(key):

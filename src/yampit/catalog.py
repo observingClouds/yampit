@@ -267,7 +267,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
 
 
 def read_dmi_catalog(flatten=True):
-    intake_esm_url = "https://object-store.os-api.cci1.ecmwf.int/deode-dcmdb/catalog/catalog-fdb.json"
+    intake_esm_url = "https://object-store.os-api.cci1.ecmwf.int/deode-dcmdb/catalog/deode_intake_esm_catalog-rc.json"
     cat = intake.open_esm_datastore(
             intake_esm_url,
             columns_with_iterables=["fdb", "variables", "stores"],

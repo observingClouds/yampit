@@ -11,7 +11,7 @@ from .exceptions import NoSuchData
 
 app = Sanic("YAMPIT_Server")
 
-WorkerManager.THRESHOLD = 1200
+WorkerManager.THRESHOLD = 8000
 
 # app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_destine_catalog().items()}
 app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog(flatten=False).items()}

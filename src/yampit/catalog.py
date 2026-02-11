@@ -9,6 +9,9 @@ import datetime as dt
 import isodate
 import pandas as pd
 import pyproj
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=None)
@@ -115,16 +118,20 @@ def _build_coords_from_exp_config(config, use_proj=True, flatten=True) -> Dict:
     period = isodate.parse_duration(config['config.general.times.forecast_range'])
     end = start + period
 
+# Fix deprecated pandas frequency notation: 'H' -> 'h', 'T' -> 'min', 'S' -> 's'
+    freq_str = config['config.general.output_settings.fullpos'].replace('PT', '')
+    freq_str = freq_str.replace('H', 'h').replace('T', 'min').replace('S', 's')
+
     if flatten:
         coords = {
-            "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
-            "cell": range(config['config.domain.nimax']*config['config.domain.njmax']),
+            "time": pd.date_range(start, end, freq=freq_str),  # TODO check FDB output freq
+            "cell": range(int(config['config.domain.nimax'])*int(config['config.domain.njmax'])),
         }
     else:
         coords = {
-            "time": pd.date_range(start, end, freq=f"{config['config.general.output_settings.fullpos'].replace('PT','')}"),  # TODO check FDB output freq
-            "x": np.arange(config['config.domain.nimax']),
-            "y": np.arange(config['config.domain.njmax']),
+            "time": pd.date_range(start, end, freq=freq_str),  # TODO check FDB output freq
+            "x": np.arange(int(config['config.domain.nimax'])),
+            "y": np.arange(int(config['config.domain.njmax'])),
         }
 
     if use_proj:
@@ -262,9 +269,13 @@ def read_dmi_catalog(flatten=True):
 
     ds_collection = {}
     for name, exp in cat.items():
-        if exp.df.iloc[0]["fdb"] is not {}:
+        if exp.df.iloc[0]["fdb"] is not {} and "fdb_request" in exp.df.iloc[0]["fdb"] and "georef" in exp.df.iloc[0]["fdb"]["fdb_request"]:
             ds_name = name
-            ds_collection[ds_name] = _decode_dmi_catalog_entry(exp.df.iloc[0], flatten=flatten)
+            try:
+                ds_collection[ds_name] = _decode_dmi_catalog_entry(exp.df.iloc[0], flatten=flatten)
+            except Exception as e:
+                logger.warning(f"Skipping catalog entry '{ds_name}' due to error: {type(e).__name__}: {e}")
+                continue
     return ds_collection
 
 

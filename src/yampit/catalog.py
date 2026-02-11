@@ -168,10 +168,17 @@ def get_domain_properties(config: dict) -> dict:
         "gsize": config["config.domain.xdx"],
     }
 
+    # Validate projection parameters are not NaN or None
+    required_params = ["latc", "lonc", "lat0", "lon0"]
+    for param in required_params:
+        value = domain_spec[param]
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            raise ValueError(f"Invalid projection parameter '{param}': {value}")
+
     lonc = domain_spec["lonc"]
     latc = domain_spec["latc"]
-    nlon = domain_spec["nlon"]
-    nlat = domain_spec["nlat"]
+    nlon = int(domain_spec["nlon"])
+    nlat = int(domain_spec["nlat"])
     gsize = domain_spec["gsize"]
 
     proj_string = (

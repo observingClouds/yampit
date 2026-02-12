@@ -3,7 +3,9 @@ services:
     build:
       context: ../
       dockerfile: docker/yampit/Dockerfile
-    env_file: "./polytope.env"
+    env_file: ./polytope.env
+    environment:
+      PYTHONUNBUFFERED: '1'
   cache:
     build: varnish
     environment:
@@ -12,13 +14,13 @@ services:
     image: caddy:2.9.1
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+    - 80:80
+    - 443:443
+    - 443:443/udp
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile
-      - caddy-data:/data
-      - caddy-config:/config
+    - ./caddy/Caddyfile:/etc/caddy/Caddyfile
+    - caddy-data:/data
+    - caddy-config:/config
 volumes:
-  caddy-data:
-  caddy-config:
+  caddy-data: null
+  caddy-config: null

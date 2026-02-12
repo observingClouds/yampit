@@ -10,6 +10,7 @@ import isodate
 import pandas as pd
 import pyproj
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,23 @@ def get_param_info(paramid):
 @lru_cache(maxsize=None)
 def get_units():
     return {e["id"]: e["name"] for e in requests.get("https://codes.ecmwf.int/parameter-database/api/v1/unit/?format=json").json()}
+
+
+def prefetch_param_info(param_ids):
+    """Pre-fetch parameter info for multiple IDs in parallel."""
+    def fetch_single(paramid):
+        try:
+            return get_param_info(paramid)
+        except Exception as e:
+            logger.warning(f"Failed to fetch param info for {paramid}: {e}")
+            return None
+    
+    # Pre-fetch units
+    get_units()
+    
+    # Fetch all params in parallel
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        list(executor.map(fetch_single, param_ids))
 
 def param_info_to_var_metadata(param_info):
     return {
@@ -120,7 +138,7 @@ def _build_coords_from_exp_config(config, use_proj=True, flatten=True) -> Dict:
 
 # Fix deprecated pandas frequency notation: 'H' -> 'h', 'T' -> 'min', 'S' -> 's'
     freq_str = config['config.general.output_settings.fullpos'].replace('PT', '')
-    freq_str = freq_str.replace('H', 'h').replace('T', 'min').replace('S', 's')
+    freq_str = freq_str.replace('H', 'h').replace('T', 'min').replace('S', 's').replace('M', 'ME')
 
     if flatten:
         coords = {
@@ -275,7 +293,7 @@ def read_dmi_catalog(flatten=True):
         )
 
     ds_collection = {}
-    for name, exp in cat.items():
+    for name, exp in tqdm(cat.items(), desc=f"Loading DMI catalog (flatten={flatten})"):
         if exp.df.iloc[0]["fdb"] is not {} and "fdb_request" in exp.df.iloc[0]["fdb"] and "georef" in exp.df.iloc[0]["fdb"]["fdb_request"]:
             ds_name = name
             try:
@@ -286,5 +304,71 @@ def read_dmi_catalog(flatten=True):
     return ds_collection
 
 
-if __name__ == "__main__":
-    print(read_dmi_catalog())
+# if __name__ == "__main__":
+#     print(read_dmi_catalog())
+
+
+def init_catalog():
+    """Initialize catalog by fetching remote data once and processing both flatten modes."""
+    import time
+    from tqdm import tqdm
+    start_time = time.time()
+    
+    print("[YAMPIT] Starting catalog initialization...", flush=True)
+    logger.info("Starting catalog initialization...")
+    
+    # Pre-fetch all parameter info in parallel to speed up processing
+    param_ids = [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 
+                 174096, 228023, 228024, 228141, 228164, 228235, 228236, 
+                 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
+    print(f"[YAMPIT] Pre-fetching parameter info for {len(param_ids)} parameters...", flush=True)
+    prefetch_start = time.time()
+    prefetch_param_info(param_ids)
+    print(f"[YAMPIT] Parameter prefetch completed in {time.time()-prefetch_start:.2f}s", flush=True)
+    
+    # Fetch catalog once
+    intake_esm_url = "https://object-store.os-api.cci1.ecmwf.int/deode-dcmdb/catalog/deode_intake_esm_catalog-rc.json"
+    print(f"[YAMPIT] Fetching catalog from remote...", flush=True)
+    cat_start = time.time()
+    cat = intake.open_esm_datastore(
+            intake_esm_url,
+            columns_with_iterables=["fdb", "variables", "stores"],
+            sep="/",
+        )
+    print(f"[YAMPIT] Catalog fetch completed in {time.time()-cat_start:.2f}s", flush=True)
+    
+    # Process both flatten modes in one pass
+    datasets = {}
+    flatdatasets = {}
+    
+    valid_entries = [(f"{r[1]['case']}/{r[1]['experiment']}", r) for r in cat.df.iterrows()
+                     if r[1]["fdb"] is not {} 
+                     and "fdb_request" in r[1]["fdb"] 
+                     and "georef" in r[1]["fdb"]["fdb_request"]]
+    
+    print(f"[YAMPIT] Processing {len(valid_entries)} catalog entries...", flush=True)
+    process_start = time.time()
+    
+    for idx, (name, exp) in enumerate(valid_entries, 1):
+        if idx % 10 == 0:
+            print(f"[YAMPIT] Processed {idx}/{len(valid_entries)} entries...", flush=True)
+        
+        entry_data = exp[1]
+        
+        # Process flatten=False
+        try:
+            datasets[name] = _decode_dmi_catalog_entry(entry_data, flatten=False)
+        except Exception as e:
+            logger.warning(f"Skipping catalog entry '{name}' (flatten=False) due to error: {type(e).__name__}: {e}")
+        
+        # Process flatten=True
+        try:
+            flatdatasets[name] = _decode_dmi_catalog_entry(entry_data, flatten=True)
+        except Exception as e:
+            logger.warning(f"Skipping catalog entry '{name}' (flatten=True) due to error: {type(e).__name__}: {e}")
+    
+    print(f"[YAMPIT] Entry processing completed in {time.time()-process_start:.2f}s", flush=True)
+    print(f"[YAMPIT] Catalog initialization complete. Loaded {len(datasets)} datasets, {len(flatdatasets)} flat datasets", flush=True)
+    print(f"[YAMPIT] Total initialization time: {time.time()-start_time:.2f}s", flush=True)
+    logger.info(f"Catalog initialization complete. Loaded {len(datasets)} datasets, {len(flatdatasets)} flat datasets in {time.time()-start_time:.2f}s")
+    return datasets, flatdatasets

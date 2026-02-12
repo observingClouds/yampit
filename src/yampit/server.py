@@ -4,30 +4,36 @@ from sanic.worker.manager import WorkerManager
 
 import eccodes
 
-from .catalog import read_destine_catalog, read_dmi_catalog
+from .catalog import read_destine_catalog, read_dmi_catalog, init_catalog
 from .mapper import MarsDataset
 from .async_polytope_request_handler import AsyncPolytopeRequestHandler
 from .exceptions import NoSuchData
 
 app = Sanic("YAMPIT_Server")
 
-WorkerManager.THRESHOLD = 8000
+WorkerManager.THRESHOLD = 10000
 
-# app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_destine_catalog().items()}
-app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog(flatten=False).items()}
-app.ctx.flatdatasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog(flatten=True).items()}
-app.ctx.request_handler = AsyncPolytopeRequestHandler("polytope.lumi.apps.dte.destination-earth.eu", "destination-earth")
+@app.before_server_start
+async def setup_catalog(app, loop):
+    """Initialize catalog once when server starts (runs in each worker)."""
+    # Optimized: fetch catalog only once and process both flatten modes
+    datasets, flatdatasets = init_catalog()
+    app.ctx.datasets = {k: MarsDataset(**v) for k, v in datasets.items()}
+    app.ctx.flatdatasets = {k: MarsDataset(**v) for k, v in flatdatasets.items()}
+    app.ctx.request_handler = AsyncPolytopeRequestHandler("polytope.lumi.apps.dte.destination-earth.eu", "destination-earth")
 
 def is_meta(key):
     return key.split("/")[-1].startswith(".z")
 
 @app.get("/ds")
 async def list_datasets(request):
-    return json(list(sorted(app.ctx.datasets)))
+    return json(list(sorted(app.ctx.flatdatasets)))
 
 @app.get("/api/v1/reload")
 async def reload_catalog(request):
-    app.ctx.datasets = {k: MarsDataset(**v) for k, v in read_dmi_catalog().items()}
+    datasets, flatdatasets = init_catalog()
+    app.ctx.datasets = {k: MarsDataset(**v) for k, v in datasets.items()}
+    app.ctx.flatdatasets = {k: MarsDataset(**v) for k, v in flatdatasets.items()}
     return json({"status": "reloaded"})
 
 @app.get("/flatds/<dsid1>/<dsid2>/<key:path>")

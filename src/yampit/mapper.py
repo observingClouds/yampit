@@ -6,11 +6,21 @@ from functools import lru_cache
 import eccodes
 
 class MarsDataset:
-    def __init__(self, base_request, coords, variables, internal_dims):
+    def __init__(self, base_request, coords, variables, internal_dims, polytope_config=None, **kwargs):
         self.base_request = base_request
         self.coords = {k: np.asarray(v) for k, v in coords.items()}
         self.variables = variables
         self.internal_dims = internal_dims
+        
+        # Store polytope configuration with defaults
+        if polytope_config is None:
+            polytope_config = {
+                'host': 'polytope.lumi.apps.dte.destination-earth.eu',
+                'collection': 'destination-earth'
+            }
+        self.polytope_host = polytope_config['host']
+        self.polytope_collection = polytope_config['collection']
+        self.request_handler = None  # Will be set during server startup
     
     def set_coord_attrs(self, name, var):
         if name == "time":

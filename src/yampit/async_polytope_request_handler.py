@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from urllib.parse import urljoin
 import aiohttp
 import asyncio
@@ -24,7 +25,22 @@ class AsyncPolytopeRequestHandler:
         self.max_poll_retries = 100
         self._session = None
 
-        self.auth_headers = {"Authorization": ", ".join(self.client.auth.get_auth_headers())}
+        # Select appropriate API key based on server
+        if "polytope-test.ecmwf.int" in server:
+            api_key = f"Bearer {os.environ.get("POLYTOPE_USER_KEY_ATOS")}"
+            if not api_key:
+                logger.warning("POLYTOPE_USER_KEY_ATOS not found, falling back to polytope client auth")
+                api_key = ", ".join(self.client.auth.get_auth_headers())
+        elif "polytope.lumi.apps.dte.destination-earth.eu" in server:
+            api_key = f"Bearer {os.environ.get("POLYTOPE_USER_KEY_LUMI")}"
+            if not api_key:
+                logger.warning("POLYTOPE_USER_KEY_LUMI not found, falling back to polytope client auth")
+                api_key = ", ".join(self.client.auth.get_auth_headers())
+        else:
+            # Unknown server, use polytope client auth
+            api_key = f"Bearer {self.client.auth.get_auth_headers()}"
+        
+        self.auth_headers = {"Authorization": api_key}
 
 
     async def set_session(self):

@@ -20,7 +20,23 @@ async def setup_catalog(app, loop):
     datasets, flatdatasets = init_catalog()
     app.ctx.datasets = {k: MarsDataset(**v) for k, v in datasets.items()}
     app.ctx.flatdatasets = {k: MarsDataset(**v) for k, v in flatdatasets.items()}
-    app.ctx.request_handler = AsyncPolytopeRequestHandler("polytope.lumi.apps.dte.destination-earth.eu", "destination-earth")
+    
+    # Create request handlers, reusing instances when host/collection match
+    handler_cache = {}
+    for dataset in list(app.ctx.datasets.values()) + list(app.ctx.flatdatasets.values()):
+        key = f"{dataset.polytope_host}:{dataset.polytope_collection}"
+        if key not in handler_cache:
+            handler_cache[key] = AsyncPolytopeRequestHandler(
+                dataset.polytope_host, 
+                dataset.polytope_collection
+            )
+        dataset.request_handler = handler_cache[key]
+    
+    # Store default handler for fallback
+    app.ctx.default_request_handler = AsyncPolytopeRequestHandler(
+        "polytope.lumi.apps.dte.destination-earth.eu", 
+        "destination-earth"
+    )
 
 def is_meta(key):
     return key.split("/")[-1].startswith(".z")
@@ -39,7 +55,8 @@ async def reload_catalog(request):
 @app.get("/flatds/<dsid1>/<dsid2>/<key:path>")
 async def get_flattened_chunk(request, dsid1, dsid2, key):
     dsid = f"{dsid1}/{dsid2}"
-    kind, request = app.ctx.flatdatasets[dsid].key2request(key)
+    dataset = app.ctx.flatdatasets[dsid]
+    kind, request = dataset.key2request(key)
 
     if is_meta(key):
         content_type="application/json"
@@ -55,9 +72,13 @@ async def get_flattened_chunk(request, dsid1, dsid2, key):
         return raw(request, content_type=content_type, headers=headers)
     elif kind == 'request':
         try:
-            data = await app.ctx.request_handler.get(request)
+            data = await dataset.request_handler.get(request)
         except NoSuchData:
-            raise exceptions.NotFound("Could not find data for MARS request " + str(request))
+            # Try fallback handler
+            try:
+                data = await app.ctx.default_request_handler.get(request)
+            except NoSuchData:
+                raise exceptions.NotFound("Could not find data for MARS request " + str(request))
 
         mid = eccodes.codes_new_from_message(data)
         data = eccodes.codes_get_array(mid, "values")
@@ -69,7 +90,8 @@ async def get_flattened_chunk(request, dsid1, dsid2, key):
 @app.get("/ds/<dsid1>/<dsid2>/<key:path>")
 async def get_chunk(request, dsid1, dsid2, key):
     dsid = f"{dsid1}/{dsid2}"
-    kind, request = app.ctx.datasets[dsid].key2request(key)
+    dataset = app.ctx.datasets[dsid]
+    kind, request = dataset.key2request(key)
 
     if is_meta(key):
         content_type="application/json"
@@ -85,9 +107,13 @@ async def get_chunk(request, dsid1, dsid2, key):
         return raw(request, content_type=content_type, headers=headers)
     elif kind == 'request':
         try:
-            data = await app.ctx.request_handler.get(request)
+            data = await dataset.request_handler.get(request)
         except NoSuchData:
-            raise exceptions.NotFound("Could not find data for MARS request " + str(request))
+            # Try fallback handler
+            try:
+                data = await app.ctx.default_request_handler.get(request)
+            except NoSuchData:
+                raise exceptions.NotFound("Could not find data for MARS request " + str(request))
 
         mid = eccodes.codes_new_from_message(data)
         data = eccodes.codes_get_array(mid, "values")

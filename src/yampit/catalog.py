@@ -247,6 +247,19 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     base_request = cat_entry["fdb"]["fdb_request"]
     base_request['levtype'] = 'sfc'
     coords = _build_coords_from_exp_config(cat_entry, use_proj=True, flatten=flatten)
+    
+    # Determine polytope configuration based on stores
+    if cat_entry.get('fdb', {}).get('data_briges', {}).get('lumi', False):
+        polytope_config = {
+            'host': 'polytope.lumi.apps.dte.destination-earth.eu',
+            'collection': 'destination-earth'
+        }
+    else:
+        polytope_config = {
+            'host': 'polytope-test.ecmwf.int',
+            'collection': 'deode'
+        }
+    
     if flatten:
         variables = {
             get_param_info(varid)["shortname"]: {
@@ -279,6 +292,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
         "coords": coords,
         "variables": variables,
         "internal_dims": internal_dims,
+        "polytope_config": polytope_config,
     }
 
     return result
@@ -344,7 +358,8 @@ def init_catalog():
     valid_entries = [(f"{r[1]['case']}/{r[1]['experiment']}", r) for r in cat.df.iterrows()
                      if r[1]["fdb"] is not {} 
                      and "fdb_request" in r[1]["fdb"] 
-                     and "georef" in r[1]["fdb"]["fdb_request"]]
+                     and "georef" in r[1]["fdb"]["fdb_request"]
+                     ]
     
     print(f"[YAMPIT] Processing {len(valid_entries)} catalog entries...", flush=True)
     process_start = time.time()

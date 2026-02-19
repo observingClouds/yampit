@@ -54,9 +54,17 @@ def convert_gsv_cat_entry(entry):
     args = entry["args"]
     metadata = entry["metadata"]
     if "levelist" in args["request"]:
-        leveldim = {"levelist": np.array(args["request"]["levelist"])}
+        leveldim = {"levelist": np.array(args["request"]["levelist"]) }
     else:
         leveldim = {}
+
+    variables = {}
+    for varid in metadata["variables"]:
+        pinfo = get_param_info(varid)
+        variables[pinfo["shortname"]] = {
+            "dims": ("time", *leveldim, "cell"),
+            **param_info_to_var_metadata(pinfo),
+        }
 
     return {
         "base_request": {k: v for k, v in args["request"].items() if k not in ["levelist"]},
@@ -65,13 +73,7 @@ def convert_gsv_cat_entry(entry):
             "cell": source_grids[metadata["source_grid_name"]],
             **leveldim,
         },
-        "variables": {
-            get_param_info(varid)["shortname"]: {
-                "dims": ("time", *leveldim, "cell"),
-                **param_info_to_var_metadata(get_param_info(varid)),
-            }
-            for varid in metadata["variables"]
-        },
+        "variables": variables,
         "internal_dims": ["cell"],
     }
 
@@ -247,6 +249,11 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     base_request = cat_entry["fdb"]["fdb_request"]
     base_request['levtype'] = 'sfc'
     coords = _build_coords_from_exp_config(cat_entry, use_proj=True, flatten=flatten)
+    # Parameter list used for variables (define once to avoid duplication)
+    varids = [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075,
+              174096, 228023, 228024, 228141, 228164, 228235, 228236,
+              231045, 231046, 231047, 231048, 231049, 231067, 231070,
+              260109, 260242]
     
     # Determine polytope configuration based on stores
     if cat_entry.get('fdb', {}).get('data_briges', {}).get('lumi', False):
@@ -261,26 +268,28 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
         }
     
     if flatten:
-        variables = {
-            get_param_info(varid)["shortname"]: {
+        # build variables using cached param lookups (avoid duplicate get_param_info calls)
+        variables = {}
+        for varid in varids:
+            pinfo = get_param_info(varid)
+            variables[pinfo["shortname"]] = {
                 "dims": ("time", "cell"),
-                **param_info_to_var_metadata(get_param_info(varid)),
+                **param_info_to_var_metadata(pinfo),
             }
-            for varid in [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 174096, 228023, 228024, 228141, 228164, 228235, 228236, 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
-        }
         if "lat" in coords:
             variables["lat"] = {"dims": ("cell",), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude"}}
         if "lon" in coords:
             variables["lon"] = {"dims": ("cell",), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude"}}
         internal_dims = ["cell", "lat", "lon"]
     else:
-        variables = {
-            get_param_info(varid)["shortname"]: {
-            "dims": ("time", "x", "y"),
-            **param_info_to_var_metadata(get_param_info(varid)),
+        # reuse the same varid list and cached lookups
+        variables = {}
+        for varid in varids:
+            pinfo = get_param_info(varid)
+            variables[pinfo["shortname"]] = {
+                "dims": ("time", "x", "y"),
+                **param_info_to_var_metadata(pinfo),
             }
-            for varid in [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 174096, 228023, 228024, 228141, 228164, 228235, 228236, 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
-        }
         if "lat" in coords:
             variables["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude", "axis": "Y"}}
         if "lon" in coords:
@@ -364,23 +373,41 @@ def init_catalog():
     print(f"[YAMPIT] Processing {len(valid_entries)} catalog entries...", flush=True)
     process_start = time.time()
     
-    for idx, (name, exp) in enumerate(valid_entries, 1):
-        if idx % 10 == 0:
-            print(f"[YAMPIT] Processed {idx}/{len(valid_entries)} entries...", flush=True)
-        
-        entry_data = exp[1]
-        
-        # Process flatten=False
+    # Parallelize per-entry decoding using threads (shares cached param lookups)
+    import os
+    from concurrent.futures import as_completed
+
+    max_workers = min(8, (os.cpu_count() or 1) * 2)
+    print(f"[YAMPIT] Processing entries with max_workers={max_workers}...", flush=True)
+
+    def _process_single_entry(name, row):
+        entry_data = row[1]
+        ds = None
+        flatds = None
         try:
-            datasets[name] = _decode_dmi_catalog_entry(entry_data, flatten=False)
+            ds = _decode_dmi_catalog_entry(entry_data, flatten=False)
         except Exception as e:
             logger.warning(f"Skipping catalog entry '{name}' (flatten=False) due to error: {type(e).__name__}: {e}")
-        
-        # Process flatten=True
         try:
-            flatdatasets[name] = _decode_dmi_catalog_entry(entry_data, flatten=True)
+            flatds = _decode_dmi_catalog_entry(entry_data, flatten=True)
         except Exception as e:
             logger.warning(f"Skipping catalog entry '{name}' (flatten=True) due to error: {type(e).__name__}: {e}")
+        return name, ds, flatds
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_process_single_entry, name, exp): name for name, exp in valid_entries}
+        for i, fut in enumerate(tqdm(as_completed(futures), total=len(futures), desc=f"Processing DMI catalog entries"), 1):
+            name = futures[fut]
+            try:
+                n, ds, flatds = fut.result()
+                if ds is not None:
+                    datasets[n] = ds
+                if flatds is not None:
+                    flatdatasets[n] = flatds
+            except Exception as e:
+                logger.warning(f"Skipping catalog entry '{name}' due to error during processing: {type(e).__name__}: {e}")
+            if i % 10 == 0:
+                print(f"[YAMPIT] Processed {i}/{len(valid_entries)} entries...", flush=True)
     
     print(f"[YAMPIT] Entry processing completed in {time.time()-process_start:.2f}s", flush=True)
     print(f"[YAMPIT] Catalog initialization complete. Loaded {len(datasets)} datasets, {len(flatdatasets)} flat datasets", flush=True)

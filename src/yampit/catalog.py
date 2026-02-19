@@ -14,6 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
+# Parameter IDs commonly used for DMI catalog variables
+DMI_VARIDS = [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075,
+              174096, 228023, 228024, 228141, 228164, 228235, 228236,
+              231045, 231046, 231047, 231048, 231049, 231067, 231070,
+              260109, 260242]
+
 
 @lru_cache(maxsize=None)
 def get_param_info(paramid):
@@ -249,11 +255,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     base_request = cat_entry["fdb"]["fdb_request"]
     base_request['levtype'] = 'sfc'
     coords = _build_coords_from_exp_config(cat_entry, use_proj=True, flatten=flatten)
-    # Parameter list used for variables (define once to avoid duplication)
-    varids = [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075,
-              174096, 228023, 228024, 228141, 228164, 228235, 228236,
-              231045, 231046, 231047, 231048, 231049, 231067, 231070,
-              260109, 260242]
+    # Use module-level DMI_VARIDS (single source of truth)
     
     # Determine polytope configuration based on stores
     if cat_entry.get('fdb', {}).get('data_briges', {}).get('lumi', False):
@@ -270,7 +272,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     if flatten:
         # build variables using cached param lookups (avoid duplicate get_param_info calls)
         variables = {}
-        for varid in varids:
+        for varid in DMI_VARIDS:
             pinfo = get_param_info(varid)
             variables[pinfo["shortname"]] = {
                 "dims": ("time", "cell"),
@@ -284,7 +286,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     else:
         # reuse the same varid list and cached lookups
         variables = {}
-        for varid in varids:
+        for varid in DMI_VARIDS:
             pinfo = get_param_info(varid)
             variables[pinfo["shortname"]] = {
                 "dims": ("time", "x", "y"),
@@ -305,6 +307,86 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
     }
 
     return result
+
+
+def _decode_dmi_catalog_entry_both(cat_entry):
+    """Compute and return (nonflat_result, flat_result) in a single pass.
+
+    Shares projection and parameter-info lookups to avoid duplicate work when
+    both flattened and non-flattened representations are needed.
+    """
+    base_request = cat_entry["fdb"]["fdb_request"]
+    base_request['levtype'] = 'sfc'
+
+    # Compute non-flattened coords once (contains 2D lat/lon if georef present)
+    coords_nonflat = _build_coords_from_exp_config(cat_entry, use_proj=True, flatten=False)
+
+    # Derive flattened coords from non-flat coords (avoid recomputing projection)
+    nx = len(coords_nonflat.get("x", []))
+    ny = len(coords_nonflat.get("y", []))
+    cell_count = nx * ny if nx and ny else int(cat_entry["config"]["domain"]["nimax"]) * int(cat_entry["config"]["domain"]["njmax"])
+    coords_flat = {
+        "time": coords_nonflat["time"],
+        "cell": range(cell_count),
+    }
+    if "lat" in coords_nonflat:
+        coords_flat["lat"] = coords_nonflat["lat"].flatten().astype('<f4')
+        coords_flat["lon"] = coords_nonflat["lon"].flatten().astype('<f4')
+
+    # polytope config (same logic as single-decoder)
+    if cat_entry.get('fdb', {}).get('data_briges', {}).get('lumi', False):
+        polytope_config = {
+            'host': 'polytope.lumi.apps.dte.destination-earth.eu',
+            'collection': 'destination-earth'
+        }
+    else:
+        polytope_config = {
+            'host': 'polytope-test.ecmwf.int',
+            'collection': 'deode'
+        }
+
+    # Build variable metadata for both flattened and non-flattened using a single
+    # loop over DMI_VARIDS (reuses cached get_param_info calls).
+    variables_flat = {}
+    variables_nonflat = {}
+    for varid in DMI_VARIDS:
+        pinfo = get_param_info(varid)
+        variables_flat[pinfo["shortname"]] = {
+            "dims": ("time", "cell"),
+            **param_info_to_var_metadata(pinfo),
+        }
+        variables_nonflat[pinfo["shortname"]] = {
+            "dims": ("time", "x", "y"),
+            **param_info_to_var_metadata(pinfo),
+        }
+
+    if "lat" in coords_flat:
+        variables_flat["lat"] = {"dims": ("cell",), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude"}}
+    if "lon" in coords_flat:
+        variables_flat["lon"] = {"dims": ("cell",), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude"}}
+
+    if "lat" in coords_nonflat:
+        variables_nonflat["lat"] = {"dims": ("y", "x"), "attrs": {"long_name": "latitude", "units": "degrees_north", "standard_name": "latitude", "axis": "Y"}}
+    if "lon" in coords_nonflat:
+        variables_nonflat["lon"] = {"dims": ("y", "x"), "attrs": {"long_name": "longitude", "units": "degrees_east", "standard_name": "longitude", "axis": "X"}}
+
+    nonflat_result = {
+        "base_request": base_request,
+        "coords": coords_nonflat,
+        "variables": variables_nonflat,
+        "internal_dims": ["x", "y", "lat", "lon"],
+        "polytope_config": polytope_config,
+    }
+
+    flat_result = {
+        "base_request": base_request,
+        "coords": coords_flat,
+        "variables": variables_flat,
+        "internal_dims": ["cell", "lat", "lon"],
+        "polytope_config": polytope_config,
+    }
+
+    return nonflat_result, flat_result
 
 
 def read_dmi_catalog(flatten=True):
@@ -341,9 +423,7 @@ def init_catalog():
     logger.info("Starting catalog initialization...")
     
     # Pre-fetch all parameter info in parallel to speed up processing
-    param_ids = [129, 130, 134, 151, 159, 165, 166, 167, 172, 3073, 3074, 3075, 
-                 174096, 228023, 228024, 228141, 228164, 228235, 228236, 
-                 231045, 231046, 231047, 231048, 231049, 231067, 231070, 260109, 260242]
+    param_ids = DMI_VARIDS
     print(f"[YAMPIT] Pre-fetching parameter info for {len(param_ids)} parameters...", flush=True)
     prefetch_start = time.time()
     prefetch_param_info(param_ids)
@@ -382,16 +462,11 @@ def init_catalog():
 
     def _process_single_entry(name, row):
         entry_data = row[1]
-        ds = None
-        flatds = None
         try:
-            ds = _decode_dmi_catalog_entry(entry_data, flatten=False)
+            ds, flatds = _decode_dmi_catalog_entry_both(entry_data)
         except Exception as e:
-            logger.warning(f"Skipping catalog entry '{name}' (flatten=False) due to error: {type(e).__name__}: {e}")
-        try:
-            flatds = _decode_dmi_catalog_entry(entry_data, flatten=True)
-        except Exception as e:
-            logger.warning(f"Skipping catalog entry '{name}' (flatten=True) due to error: {type(e).__name__}: {e}")
+            logger.warning(f"Skipping catalog entry '{name}' due to error during combined decoding: {type(e).__name__}: {e}")
+            return name, None, None
         return name, ds, flatds
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:

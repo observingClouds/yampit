@@ -440,49 +440,42 @@ def init_catalog():
         )
     print(f"[YAMPIT] Catalog fetch completed in {time.time()-cat_start:.2f}s", flush=True)
     
-    # Process both flatten modes in one pass
+    # Process both flatten modes in one pass (apply-style, parallel)
     datasets = {}
     flatdatasets = {}
-    
-    valid_entries = [(f"{r[1]['case']}/{r[1]['experiment']}", r) for r in cat.df.iterrows()
-                     if r[1]["fdb"] is not {} 
-                     and "fdb_request" in r[1]["fdb"] 
-                     and "georef" in r[1]["fdb"]["fdb_request"]
-                     ]
-    
-    print(f"[YAMPIT] Processing {len(valid_entries)} catalog entries...", flush=True)
+
+    # Filter DataFrame to relevant rows and prepare name/row lists (apply-style)
+    df = cat.df
+    mask = df.apply(lambda r: (r["fdb"] != {}) and ("fdb_request" in r["fdb"]) and ("georef" in r["fdb"]["fdb_request"]), axis=1)
+    filtered = df[mask].reset_index(drop=True)
+
+    names = [f"{r['case']}/{r['experiment']}" for _, r in filtered.iterrows()]
+    rows = [r for _, r in filtered.iterrows()]
+
+    print(f"[YAMPIT] Processing {len(rows)} catalog entries...", flush=True)
     process_start = time.time()
-    
-    # Parallelize per-entry decoding using threads (shares cached param lookups)
+
+    # Parallel map across rows (preserves order) — keeps LRU cache benefits
     import os
-    from concurrent.futures import as_completed
 
     max_workers = min(8, (os.cpu_count() or 1) * 2)
     print(f"[YAMPIT] Processing entries with max_workers={max_workers}...", flush=True)
 
-    def _process_single_entry(name, row):
-        entry_data = row[1]
+    def _safe_decode_row(row, name=None):
         try:
-            ds, flatds = _decode_dmi_catalog_entry_both(entry_data)
+            return _decode_dmi_catalog_entry_both(row)
         except Exception as e:
-            logger.warning(f"Skipping catalog entry '{name}' due to error during combined decoding: {type(e).__name__}: {e}")
-            return name, None, None
-        return name, ds, flatds
+            logger.warning(f"Skipping catalog entry '{name or row.get('experiment','<unknown>')}' due to error during combined decoding: {type(e).__name__}: {e}")
+            return None
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_process_single_entry, name, exp): name for name, exp in valid_entries}
-        for i, fut in enumerate(tqdm(as_completed(futures), total=len(futures), desc=f"Processing DMI catalog entries"), 1):
-            name = futures[fut]
-            try:
-                n, ds, flatds = fut.result()
-                if ds is not None:
-                    datasets[n] = ds
-                if flatds is not None:
-                    flatdatasets[n] = flatds
-            except Exception as e:
-                logger.warning(f"Skipping catalog entry '{name}' due to error during processing: {type(e).__name__}: {e}")
-            if i % 10 == 0:
-                print(f"[YAMPIT] Processed {i}/{len(valid_entries)} entries...", flush=True)
+        results = list(tqdm(ex.map(_safe_decode_row, rows), total=len(rows), desc="Processing DMI catalog entries"))
+
+    for i, (name, out) in enumerate(zip(names, results), 1):
+        if out is not None:
+            datasets[name], flatdatasets[name] = out
+        if i % 10 == 0:
+            print(f"[YAMPIT] Processed {i}/{len(rows)} entries...", flush=True)
     
     print(f"[YAMPIT] Entry processing completed in {time.time()-process_start:.2f}s", flush=True)
     print(f"[YAMPIT] Catalog initialization complete. Loaded {len(datasets)} datasets, {len(flatdatasets)} flat datasets", flush=True)

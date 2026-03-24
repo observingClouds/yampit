@@ -265,7 +265,7 @@ def _decode_dmi_catalog_entry(cat_entry, flatten=True):
         }
     else:
         polytope_config = {
-            'host': 'polytope-test.ecmwf.int',
+            'host': 'polytope.ecmwf.int',
             'collection': 'deode'
         }
     
@@ -341,7 +341,7 @@ def _decode_dmi_catalog_entry_both(cat_entry):
         }
     else:
         polytope_config = {
-            'host': 'polytope-test.ecmwf.int',
+            'host': 'polytope.ecmwf.int',
             'collection': 'deode'
         }
 

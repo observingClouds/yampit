@@ -26,7 +26,7 @@ class AsyncPolytopeRequestHandler:
         self._session = None
 
         # Select appropriate API key based on server
-        if "polytope-test.ecmwf.int" in server:
+        if "polytope.ecmwf.int" in server:
             api_key = f"Bearer {os.environ.get("POLYTOPE_USER_KEY_ATOS")}"
             if not api_key:
                 logger.warning("POLYTOPE_USER_KEY_ATOS not found, falling back to polytope client auth")

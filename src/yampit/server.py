@@ -11,7 +11,7 @@ from .exceptions import NoSuchData
 
 app = Sanic("YAMPIT_Server")
 
-WorkerManager.THRESHOLD = 10000
+WorkerManager.THRESHOLD = 20000
 
 @app.before_server_start
 async def setup_catalog(app, loop):
